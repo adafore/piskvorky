@@ -1,0 +1,34 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ================================================================
+    // Piškvorkový turnaj – aplikace BEZ Firebase Auth (školní akce).
+    //
+    // Bez přihlášeného uživatele nelze na úrovni rules ověřovat, KDO
+    // zapisuje. Pravidla jsou proto záměrně otevřená pro dokumenty
+    // turnaje ("důvěra") a VŠECHNA ochrana (unikátnost jmen, práva
+    // hostitele, validace tahů, atomické přechody stavů) je řešena
+    // aplikačně – přes Firestore transakce.
+    //
+    // Struktura dat aplikace:
+    //   /turnaj/room                       – jediný dokument se stavem
+    //   /turnaj/room/zapasy/{zapasId}     – subkolekce zápasů
+    //   /turnaj/room/pritomnost/{hracKey} – subkolekce heartbeatů
+    // ================================================================
+    match /turnaj/{roomId} {
+      allow read, write: if true;
+      match /{subKolekce}/{docId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Pokud na stejném projektu (zasedak-kv) zůstává běžet i stará
+    // aplikace "Zasedací pořádek", nech její pravidla nezměněná:
+    match /classrooms/{trida} {
+      allow read, write: if true;
+    }
+
+    // Cokoliv jiného zůstává zakázané (Firestore default deny).
+  }
+}

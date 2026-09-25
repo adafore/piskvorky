@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Piškvorkový turnaj</title>
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="page">
+  <div class="card">
+
+    <header>
+      <div class="title-row">
+        <span class="logo"><img src="assets/logo.png" width="34" height="34" alt=""></span>
+        <h1>Piškvorkový turnaj</h1>
+      </div>
+      <div class="header-meta" id="header-meta"></div>
+      <nav class="header-nav" id="header-nav"></nav>
+    </header>
+
+    <main id="app">
+
+      <!-- 1) Vstup -->
+      <section id="screen-vstup" class="screen">
+        <div class="entry">
+          <img class="entry-banner" src="assets/banner.jpg" alt="" width="1200" height="675">
+          <h2>Připoj se do turnaje</h2>
+          <p class="hint">Zadej své jméno a připoj se do společné lobby. Uvidíš aktuální nastavení, pavouk i cizí zápasy naživo.</p>
+          <form id="form-join" autocomplete="off">
+            <input id="join-name" type="text" maxlength="20" placeholder="Tvoje jméno…" autocomplete="off">
+            <button class="btn btn-primary" id="join-btn" type="submit">Připojit</button>
+          </form>
+          <p class="entry-error" id="join-error"></p>
+        </div>
+      </section>
+
+      <!-- 2) Lobby -->
+      <section id="screen-lobby" class="screen hidden"></section>
+
+      <!-- 3) Turnajový přehled (pavouk / životy / liga) -->
+      <section id="screen-prehled" class="screen hidden"></section>
+
+      <!-- 4) Herní obrazovka (hráč i divák) -->
+      <section id="screen-hra" class="screen hidden"></section>
+
+      <!-- 5) Konec turnaje -->
+      <section id="screen-konec" class="screen hidden"></section>
+
+    </main>
+  </div>
+</div>
+
+<!-- Potvrzovací modal (např. reset turnaje) -->
+<div id="modal-overlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h2 id="modal-title"></h2>
+    <p id="modal-text" class="modal-text"></p>
+    <div class="modal-buttons">
+      <span></span>
+      <div class="modal-buttons-right">
+        <button id="modal-cancel" class="btn btn-secondary">Zrušit</button>
+        <button id="modal-ok" class="btn btn-danger">Potvrdit</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="status" class="status"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
