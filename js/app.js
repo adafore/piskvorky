@@ -68,11 +68,12 @@ function vychoziRoom() {
 }
 
 // ============================ PŘIPOJENÍ ====================================
-// Jména musí být v lobby unikátní (case-insensitive + bez diakritiky).
-// VÝJIMKA: rekonekt stejným jménem musí projít – proto je jméno "obsazené"
-// jen tehdy, když jeho hráč momentálně odpovídá na heartbeat (je online).
-// Pozdě připojený NOVÝ hráč se během turnaje stává divákem (pavouk je
-// uzamčený od startu; do lobby se vrací jen resetem od hosta).
+// Jméno se normalizuje (case-insensitive + bez diakritiky) na klíč hráče.
+// Stejné jméno může použít i víc zařízení najednou (vědomě neblokujeme) –
+// ať už jde o návrat po odpojení, nebo prosté sdílení jednoho hráče víc
+// lidmi/zařízeními zároveň (oba pak mají stejná práva dělat tahy za tuhle
+// identitu). Pozdě připojený NOVÝ hráč se během turnaje stává divákem
+// (pavouk je uzamčený od startu; do lobby se vrací jen resetem od hosta).
 async function pripoj(jmenoRaw) {
   const zadane = jmenoRaw.trim().replace(/\s+/g, " ");
   const err = $("#join-error");
@@ -83,6 +84,7 @@ async function pripoj(jmenoRaw) {
   $("#join-btn").disabled = true;
   setStatus("Připojuji…");
   try {
+    let jizOnline = false;
     await runTransaction(db, async (tx) => {
       // POZOR: Firestore transakce vyžaduje VŠECHNA čtení PŘED prvními
       // zápisy; a pro jistotu zapisujeme každý dokument jen jednou.
@@ -90,13 +92,15 @@ async function pripoj(jmenoRaw) {
       const rd = rs.exists() ? rs.data() : {};
       const hm = rd.hraci ?? {};
 
-      let online = false;
+      // Stejné jméno smí použít i víc zařízení/lidí najednou (schválně
+      // neblokujeme) – klidně tím sdílí jednoho hráče (např. si chce s
+      // někým "půjčit" tah, nebo se omylem připojil ze dvou zařízení).
+      // Jen si to poznamenáme, ať to dole umíme hráči zmínit v hlášce.
       if (hm[key]) {
         const ps = await tx.get(pritomnostRef(key));
         const ts = ps.exists() ? tsMs(ps.data().posledniVideni) : null;
-        online = ts != null && (nowServer() - ts) < ONLINE_LIMIT_MS;
+        jizOnline = ts != null && (nowServer() - ts) < ONLINE_LIMIT_MS;
       }
-      if (online) throw new Error("Jméno je právě obsazené – zkus jiné.");
 
       // Jediný zápis do room: vytvoření výchozího stavu (pokud dokument
       // ještě neexistuje) + případná registrace nového hráče.
@@ -106,13 +110,14 @@ async function pripoj(jmenoRaw) {
       }
       if (Object.keys(roomPatch).length) tx.set(ROOM_REF, roomPatch, { merge: true });
 
-      // Offline hráč se stejným klíčem => navázání (rekonekt): statistiky
-      // i zobrazované jméno se zachovají, jen obnovíme presence.
+      // Offline hráč (nebo druhé zařízení stejného jména) se stejným klíčem
+      // => navázání (rekonekt/sdílení): statistiky i zobrazované jméno se
+      // zachovají, jen obnovíme presence.
       tx.set(pritomnostRef(key), { key, jmeno: hm[key]?.jmeno ?? zadane, posledniVideni: serverTimestamp() }, { merge: true });
     });
     S.me = { key, jmeno: zadane };
     localStorage.setItem("piskvorky-jmeno", zadane);
-    setStatus("Připojen!");
+    setStatus(jizOnline ? "Připojen! (sdílíš hráče s někým dalším)" : "Připojen!");
     startApp();
   } catch (e) {
     err.textContent = e.message || "Připojení se nepovedlo.";
@@ -251,7 +256,8 @@ function renderHeader() {
   if (fase === "running" && myId && S.viewMatchId !== myId) nav += `<button class="btn btn-primary" data-nav="muj">⚔ Můj zápas</button>`;
   if (fase === "finished" && S.screen === "konec") nav += `<button class="btn btn-secondary" data-nav="prehled">📋 Průběh turnaje</button>`;
   if (fase === "finished" && S.screen === "prehled") nav += `<button class="btn btn-secondary" data-nav="konec">🏁 Výsledky</button>`;
-  if (jsemHost() && fase !== "lobby") nav += `<button class="btn btn-ghost" data-nav="reset">♻ Nový turnaj</button>`;
+  if (jsemHost() && fase === "running") nav += `<button class="btn btn-ghost" data-nav="ukoncit">⏹ Ukončit turnaj</button>`;
+  if (jsemHost() && fase === "finished") nav += `<button class="btn btn-ghost" data-nav="reset">▶ Nové kolo</button>`;
   $("#header-nav").innerHTML = nav;
 }
 
@@ -261,7 +267,8 @@ $("#header-nav").addEventListener("click", e => {
   if (b.dataset.nav === "prehled") { S.viewMatchId = null; S.screen = "prehled"; render(); }
   if (b.dataset.nav === "konec") { S.screen = "konec"; render(); }
   if (b.dataset.nav === "muj") { const id = mujAktivniZapas(); if (id) { S.viewMatchId = id; S.screen = "hra"; render(); } }
-  if (b.dataset.nav === "reset") resetTurnaje();
+  if (b.dataset.nav === "reset") resetTurnaje(false);
+  if (b.dataset.nav === "ukoncit") resetTurnaje(true);
 });
 
 // ============================ LOBBY ========================================
@@ -302,11 +309,9 @@ function renderLobby() {
           <select id="set-velikost">${opt(5, 25, nast.velikostPole)}</select></label>
         <label>Čas na hráče
           <select id="set-cas">${[1, 2, 3, 5, 10, 15, 20, 30].map(m => `<option value="${m * 60}" ${m * 60 === nast.casNaHrace ? "selected" : ""}>${m} min</option>`).join("")}</select></label>
-        <label>Délka výherní řady
-          <select id="set-rada">${opt(3, minOpt, Math.min(nast.delkaRady, minOpt))}</select></label>
-        <label>Počet kol ${nast.rezim === "liga" ? "" : "(liga)"}
-          <select id="set-kola" ${nast.rezim === "liga" ? "" : "disabled"}>${opt(2, 10, nast.pocetKol)}</select></label>
       </div>
+      <div class="field"><span class="field-label">Délka výherní řady</span>
+        <select id="set-rada">${opt(3, minOpt, Math.min(nast.delkaRady, minOpt))}</select></div>
       <div class="field"><span class="field-label">Formát turnaje</span>
         <div class="switcher">
           <button data-set-rezim="pavouk" class="${nast.rezim === "pavouk" ? "active" : ""}">🕸 Pavouk</button>
@@ -316,7 +321,8 @@ function renderLobby() {
         <div class="switcher">
           <button data-set-zivoty="1" class="${nast.pocetZivotu === 1 ? "active" : ""}">1 život</button>
           <button data-set-zivoty="3" class="${nast.pocetZivotu === 3 ? "active" : ""}">3 životy</button>
-        </div></div>` : ""}
+        </div></div>` : `<div class="field"><span class="field-label">Počet kol</span>
+          <select id="set-kola">${opt(2, 10, nast.pocetKol)}</select></div>`}
       ${offline ? `<div class="warn-note">⚠ ${offline} ${offline === 1 ? "hráč je" : "hráči jsou"} offline. Turnaj můžeš spustit i tak – jejich zápasy skončí kontumačně, pokud se nevrátí (duchy necháváme v pavoukovi záměrně, ať nikdo „nezmizí“ omylem).</div>` : ""}
       <div class="lobby-actions">
         <button id="btn-start" class="btn btn-primary btn-lg" ${Object.keys(hm).length < 2 ? "disabled" : ""}>
@@ -464,7 +470,7 @@ async function proveTah(r, c) {
         return;
       }
 
-      const tahy = [...m.tahy, [r, c]];
+      const tahy = [...m.tahy, { r, c }];
       const rada = vyherniRada(postavDesku(size, tahy), r, c, m.delkaRady);
 
       if (rada) {
@@ -587,7 +593,7 @@ function upravRoomPoKonci(rd, md, vysl) {
       const koloHotove = liga.zapasy.every(z => z.kolo !== liga.aktivniKolo || z.stav === "hotovo");
       if (koloHotove) {
         const dalsi = liga.aktivniKolo + 1;
-        if (dalsi < liga.rozpis.length) {
+        if (dalsi < liga.pocetKol) {
           liga.aktivniKolo = dalsi;
           for (const z of liga.zapasy.filter(z => z.kolo === dalsi)) {
             z.stav = "probiha";
@@ -771,7 +777,7 @@ function htmlLiga(rd) {
   const tab = ligaTabulka(hm, liga, turnajHraciList());
   const aktualni = liga.aktivniKolo ?? 0;
   const volno = new Set(Object.entries(liga.volna ?? {}).filter(([, kola]) => kola.includes(aktualni)).map(([k]) => k));
-  const kolaHtml = liga.rozpis.map((_, k) => {
+  const kolaHtml = Array.from({ length: liga.pocetKol }, (_, k) => {
     const zs = liga.zapasy.filter(z => z.kolo === k);
     const aktual = k === aktualni && zs.some(z => z.stav !== "hotovo");
     const hotove = zs.every(z => z.stav === "hotovo");
@@ -831,27 +837,46 @@ function renderKonec() {
     <table class="tabulka"><thead><tr><th>Umístění</th><th>Hráč</th><th>Statistika</th></tr></thead><tbody>${radky}</tbody></table>
     <div class="konec-actions">
       <button class="btn btn-secondary" data-go-prehled>📋 Zobrazit průběh</button>
-      ${jsemHost() ? `<button class="btn btn-danger" data-reset>♻ Nový turnaj (vrátit lobby)</button>` : `<span class="t-soft" style="align-self:center;font-size:.82rem">Na nový turnaj čekáme na hosta 👑</span>`}
+      ${jsemHost() ? `<button class="btn btn-danger" data-reset>▶ Nové kolo (vrátit lobby)</button>` : `<span class="t-soft" style="align-self:center;font-size:.82rem">Na nové kolo čekáme na hosta 👑</span>`}
     </div>`;
 }
 $("#screen-konec").addEventListener("click", e => {
   if (e.target.closest("[data-go-prehled]")) { S.screen = "prehled"; render(); }
-  if (e.target.closest("[data-reset]")) resetTurnaje();
+  if (e.target.closest("[data-reset]")) resetTurnaje(false);
 });
 
 // ============================ RESET ========================================
-// Pouze host, s potvrzením. Statistiky se vynulují, zápasy se smažou
-// (po dávkách – writeBatch má limit 500 operací). Staré dokumenty by
-// mimochodem ničemu nevadily – nový turnaj zná jen své vlastní ID zápasů.
-async function resetTurnaje() {
-  if (!jsemHost()) { setStatus("Resetovat turnaj může jen host."); return; }
-  const ok = await confirmDialog(
-    "Nový turnaj?",
-    "Vymaže se celý průběh turnaje a všichni se vrátí do lobby. Nastavení zůstane zachované. Pokračovat?",
-    "Vymazat a vrátit lobby"
-  );
-  if (!ok) return;
-  setStatus("Resetuji turnaj…");
+// Pouze host. Po dohraném turnaji stačí jedno potvrzení (nic se netratí –
+// výsledky jsou už hotové). Uprostřed rozehraného turnaje ("předčasné"
+// ukončení, jePredcasne=true) je to destruktivní akce, která zahodí rozehrané
+// zápasy – proto host musí projít DVĚMA potvrzeními za sebou.
+// Statistiky se vynulují, zápasy se smažou (po dávkách – writeBatch limit 500).
+async function resetTurnaje(jePredcasne) {
+  if (!jsemHost()) { setStatus(jePredcasne ? "Ukončit turnaj může jen host." : "Spustit nové kolo může jen host."); return; }
+
+  if (jePredcasne) {
+    const ok1 = await confirmDialog(
+      "Ukončit probíhající turnaj?",
+      "Turnaj ještě neskončil – rozehrané zápasy i dosavadní výsledky se nenávratně ztratí a všichni se vrátí do lobby. Fakt to chceš udělat?",
+      "Ano, ukončit"
+    );
+    if (!ok1) return;
+    const ok2 = await confirmDialog(
+      "Opravdu, opravdu?",
+      "Poslední kontrola – tohle už nejde vzít zpět. Ukončit rozehraný turnaj?",
+      "Ano, jsem si jistý/á"
+    );
+    if (!ok2) return;
+  } else {
+    const ok = await confirmDialog(
+      "Nové kolo?",
+      "Vymaže se průběh dohraného turnaje a všichni se vrátí do lobby. Nastavení zůstane zachované. Pokračovat?",
+      "Vymazat a vrátit lobby"
+    );
+    if (!ok) return;
+  }
+
+  setStatus(jePredcasne ? "Ukončuji turnaj…" : "Připravuji nové kolo…");
   try {
     // 1) smazat všechny dokumenty zápasů (po dávkách – writeBatch limit 500)
     const snap = await getDocs(ZAPASY_COL);
@@ -888,8 +913,8 @@ async function resetTurnaje() {
     posledniFase = null;
     lobbyKey = "";
     divakToastUtan = false;
-    setStatus("Lobby je zpátky – můžeš spustit nový turnaj.");
+    setStatus(jePredcasne ? "Turnaj ukončen – lobby je zpátky." : "Lobby je zpátky – můžeš spustit nové kolo.");
   } catch (e) {
-    setStatus("Reset se nepovedl: " + e.message);
+    setStatus("Nepovedlo se to: " + e.message);
   }
 }
