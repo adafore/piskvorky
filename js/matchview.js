@@ -74,21 +74,21 @@ function htmlHry(md, jsemHrac, naTahuJsem) {
   // Deska – rekonstruovaná ze seznamu tahů.
   const deska = postavDesku(md.velikostPole, md.tahy);
   const posledni = md.tahy[md.tahy.length - 1];
-  const winSet = new Set((md.viteznaRada ?? []).map(([r, c]) => r + "," + c));
+  const winSet = new Set((md.viteznaRada ?? []).map(t => t.r + "," + t.c));
   let cells = "";
   for (let r = 0; r < md.velikostPole; r++) {
     for (let c = 0; c < md.velikostPole; c++) {
       const v = deska[r][c];
       let cls = "cell";
       if (v === 1) cls += " s1"; else if (v === 2) cls += " s2";
-      if (posledni && posledni[0] === r && posledni[1] === c) cls += " last";
+      if (posledni && posledni.r === r && posledni.c === c) cls += " last";
       if (winSet.has(r + "," + c)) cls += " win";
       cells += `<div class="${cls}" data-r="${r}" data-c="${c}"></div>`;
     }
   }
 
   const hist = md.tahy.map((t, i) =>
-    `${i + 1}. <span class="${i % 2 ? "ho" : "hx"}">${i % 2 ? "◯" : "✕"}</span> ${souradnice(t[0], t[1])}`
+    `${i + 1}. <span class="${i % 2 ? "ho" : "hx"}">${i % 2 ? "◯" : "✕"}</span> ${souradnice(t.r, t.c)}`
   ).join("<br>");
 
   return `
