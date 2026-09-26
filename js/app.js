@@ -208,9 +208,16 @@ function render() {
   }
 
   // Přepínání obrazovek podle fáze (uživatel si může z přehledu/konce přepnout sám).
-  if (fase === "lobby" && S.screen !== "lobby") S.screen = "lobby";
-  if (fase === "running" && S.screen === "lobby") S.screen = "prehled";
-  if (fase === "finished" && S.screen === "lobby") S.screen = "konec";
+  // "vstup" je počáteční stav klienta při KAŽDÉM načtení stránky (i pro
+  // hráče, co se připojuje pozdě jako divák do rozjetého/dohraného turnaje) –
+  // proto se musí řešit stejně jako přechod z "lobby", jinak zůstane hráč
+  // trčet na vstupní obrazovce s hlavičkou hlásící "Turnaj skončil" a bez
+  // možnosti se kamkoliv dostat.
+  if (fase === "lobby") {
+    if (S.screen !== "lobby") S.screen = "lobby";
+  } else if (S.screen === "vstup" || S.screen === "lobby") {
+    S.screen = fase === "finished" ? "konec" : "prehled";
+  }
   if (fase === "running") autoOtevriMujZapas();
 
   document.querySelectorAll(".screen").forEach(s => s.classList.add("hidden"));
