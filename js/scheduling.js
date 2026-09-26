@@ -173,7 +173,11 @@ export function postavLigu(keys, pozadovanaKola) {
       id: `l${k}-${i}`, kolo: k, vetev: "liga", hraci: [a, b],
       vitez: null, duvod: null, stav: "ceka", auxA: 0, auxB: 0
     })));
-  return { pocetKol, rozpis: rozpis.slice(0, pocetKol), zapasy, volna, aktivniKolo: 0 };
+  // POZOR: "rozpis" (pole polí dvojic) se záměrně NEVRACÍ – Firestore
+  // nepodporuje pole polí ("nested arrays") jako hodnotu pole dokumentu.
+  // Počet kol se dál nese jako prosté číslo (pocetKol), páry jsou už i tak
+  // rozepsané do zapasy[].hraci (plochá pole stringů, to Firestore vadit nebude).
+  return { pocetKol, zapasy, volna, aktivniKolo: 0 };
 }
 
 // ==========================================================================
