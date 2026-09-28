@@ -3,11 +3,11 @@
 import {
   db, ROOM_REF, ZAPASY_COL, PRITOMNOST_COL, zapasRef, pritomnostRef,
   onSnapshot, setDoc, runTransaction, getDocs, writeBatch, serverTimestamp,
-  nowServer, kalibrujOffset, tsMs
+  deleteField, nowServer, kalibrujOffset, tsMs
 } from "./fb.js";
 import {
   nameToKey, esc, clamp, fmtCas,
-  HEARTBEAT_MS, ONLINE_LIMIT_MS, ODPOJ_GRACE_MS, CAS_TOLERANCE_S
+  HEARTBEAT_MS, ONLINE_LIMIT_MS, ODPOJ_GRACE_MS, CAS_TOLERANCE_S, LOBBY_KICK_MS, BAN_MS
 } from "./util.js";
 import { postavDesku, vyherniRada } from "./gomoku.js";
 import {
@@ -15,7 +15,7 @@ import {
   ligaTabulka, priradPoradiLize, auxZaZapas, priradPoradi, nazivu,
   novyZapasDoc
 } from "./scheduling.js";
-import { S, jmeno, hraciMap, jeOnline, hostKeyVypocet, aktualniHostKey, jsemHost,
+import { S, jmeno, hraciMap, jeOnline, hostKeyVypocet, hostKeyZHraciMap, aktualniHostKey, jsemHost,
          mujAktivniZapas, turnajHraciList, jeTurnajovyHrac } from "./state.js";
 import { renderHru, updateClocks } from "./matchview.js";
 
@@ -92,6 +92,14 @@ async function pripoj(jmenoRaw) {
       const rd = rs.exists() ? rs.data() : {};
       const hm = rd.hraci ?? {};
 
+      // Ban po hromadném vyhození hostem (viz kicknoutVsechny) – dočasně
+      // odmítni připojení, dokud ban neuplyne.
+      const banDo = rd.zabanovani?.[key];
+      if (banDo && nowServer() < banDo) {
+        const zbyvaMin = Math.ceil((banDo - nowServer()) / 60000);
+        throw new Error(`Jsi dočasně vyhozen z místnosti, zkus to za ${zbyvaMin} min.`);
+      }
+
       // Stejné jméno smí použít i víc zařízení/lidí najednou (schválně
       // neblokujeme) – klidně tím sdílí jednoho hráče (např. si chce s
       // někým "půjčit" tah, nebo se omylem připojil ze dvou zařízení).
@@ -128,7 +136,14 @@ async function pripoj(jmenoRaw) {
 }
 
 $("#form-join").addEventListener("submit", e => { e.preventDefault(); pripoj($("#join-name").value); });
-$("#join-name").value = localStorage.getItem("piskvorky-jmeno") ?? "";
+const ulozeneJmeno = localStorage.getItem("piskvorky-jmeno") ?? "";
+$("#join-name").value = ulozeneJmeno;
+// Znovunačtení stránky (F5, zavřený a znovu otevřený tab…) tě má vrátit
+// přesně tam, kde jsi byl, ne zpátky na vstupní obrazovku – proto se se
+// zapamatovaným jménem zkusí připojit rovnou, automaticky. Konkrétní
+// obrazovka (lobby/přehled/hra/konec) se pak sama správně dopočítá podle
+// aktuální fáze turnaje (viz render()).
+if (ulozeneJmeno) pripoj(ulozeneJmeno);
 
 // ============================ HEARTBEAT ====================================
 // Heartbeat přes Web Worker: prohlížeče throttlují časovače na pozadí
@@ -190,10 +205,12 @@ function startApp() {
   startHeartbeat();
   setInterval(updateClocks, 300);   // hodiny ve všech pohledech
   setInterval(monitor, 2500);       // pasivní detekce času/odpojení
+  setInterval(lobbyKickMonitor, 1500); // odpojení hráči v LOBBY (viz níže)
 }
 
 function render() {
   if (!S.me || !S.room) return;
+  if (osetriVyhozeni()) return;
   const fase = S.room.fase ?? "lobby";
 
   // Toasty při změně fáze.
@@ -259,6 +276,7 @@ function renderHeader() {
 
   let nav = "";
   const myId = mujAktivniZapas();
+  if (fase === "lobby") nav += `<button class="btn btn-ghost" data-nav="opustit">⟵ Zpět (odpojit)</button>`;
   if (S.screen === "hra") nav += `<button class="btn btn-secondary" data-nav="prehled">📋 Přehled</button>`;
   if (fase === "running" && myId && S.viewMatchId !== myId) nav += `<button class="btn btn-primary" data-nav="muj">⚔ Můj zápas</button>`;
   if (fase === "finished" && S.screen === "konec") nav += `<button class="btn btn-secondary" data-nav="prehled">📋 Průběh turnaje</button>`;
@@ -276,7 +294,100 @@ $("#header-nav").addEventListener("click", e => {
   if (b.dataset.nav === "muj") { const id = mujAktivniZapas(); if (id) { S.viewMatchId = id; S.screen = "hra"; render(); } }
   if (b.dataset.nav === "reset") resetTurnaje(false);
   if (b.dataset.nav === "ukoncit") resetTurnaje(true);
+  if (b.dataset.nav === "opustit") opustitLobby();
 });
+
+// Odpojení sebe sama z lobby ("Zpět") – jednoduché a levné, žádné
+// potvrzení netřeba (nic destruktivního, klidně se znovu připojíš).
+async function opustitLobby() {
+  const meKey = S.me?.key;
+  if (!meKey) return;
+  setStatus("Odpojuji…");
+  try {
+    await runTransaction(db, async (tx) => {
+      const rs = await tx.get(ROOM_REF);
+      if (!rs.exists()) return;
+      tx.update(ROOM_REF, { [`hraci.${meKey}`]: deleteField() });
+    });
+  } catch (e) { console.warn("opustitLobby:", e); }
+  localStorage.removeItem("piskvorky-jmeno");
+  location.reload();
+}
+
+// Host vyhodí všechny OSTATNÍ hráče z lobby a na BAN_MS jim zablokuje
+// opětovné připojení (ochrana proti spamu/rušení lobby). Sebe (hosta)
+// samozřejmě nechává.
+async function kicknoutVsechny() {
+  if (!jsemHost()) { setStatus("Kicknout všechny může jen host."); return; }
+  const ok = await confirmDialog(
+    "Kicknout všechny?",
+    "Všichni ostatní hráči budou vyhozeni z lobby a 10 minut se nebudou moct znovu připojit. Pokračovat?",
+    "Kicknout a zabanovat"
+  );
+  if (!ok) return;
+  setStatus("Vyhazuji…");
+  try {
+    await runTransaction(db, async (tx) => {
+      const rs = await tx.get(ROOM_REF);
+      if (!rs.exists()) return;
+      const hm = rs.data().hraci ?? {};
+      const meKey = S.me?.key;
+      const banDo = nowServer() + BAN_MS;
+      const patch = {};
+      for (const key of Object.keys(hm)) {
+        if (key === meKey) continue;
+        patch[`hraci.${key}`] = deleteField();
+        patch[`zabanovani.${key}`] = banDo;
+      }
+      if (Object.keys(patch).length) tx.update(ROOM_REF, patch);
+    });
+    setStatus("Hotovo – všichni ostatní vyhozeni na 10 minut.");
+  } catch (e) {
+    setStatus("Nepovedlo se to: " + e.message);
+  }
+}
+
+// Kick jednoho konkrétního hráče – bez banu, klidně se může hned připojit
+// zpátky (žádné potvrzení netřeba, je to snadno vratné).
+async function hostKickHrace(key) {
+  if (!jsemHost()) { setStatus("Kicknout může jen host."); return; }
+  try {
+    await runTransaction(db, async (tx) => {
+      const rs = await tx.get(ROOM_REF);
+      if (!rs.exists() || !rs.data().hraci?.[key]) return;
+      tx.update(ROOM_REF, { [`hraci.${key}`]: deleteField() });
+    });
+    setStatus("Hráč vyhozen – může se hned připojit zpátky.");
+  } catch (e) {
+    setStatus("Nepovedlo se to: " + e.message);
+  }
+}
+
+// Ban jednoho konkrétního hráče na BAN_MS (10 minut) – kromě vyhození i
+// dočasně zablokuje opětovné připojení (viz kontrola v pripoj()).
+async function hostBanHrace(key) {
+  if (!jsemHost()) { setStatus("Zabanovat může jen host."); return; }
+  const jm = jmeno(key);
+  const ok = await confirmDialog(
+    "Zabanovat hráče?",
+    `${jm} bude vyhozen z lobby a 10 minut se nebude moct znovu připojit. Pokračovat?`,
+    "Zabanovat"
+  );
+  if (!ok) return;
+  try {
+    await runTransaction(db, async (tx) => {
+      const rs = await tx.get(ROOM_REF);
+      if (!rs.exists()) return;
+      const banDo = nowServer() + BAN_MS;
+      const patch = { [`zabanovani.${key}`]: banDo };
+      if (rs.data().hraci?.[key]) patch[`hraci.${key}`] = deleteField();
+      tx.update(ROOM_REF, patch);
+    });
+    setStatus(`${jm} vyhozen a na 10 minut zabanován.`);
+  } catch (e) {
+    setStatus("Nepovedlo se to: " + e.message);
+  }
+}
 
 // ============================ LOBBY ========================================
 function renderLobby() {
@@ -295,12 +406,16 @@ function renderLobby() {
   lobbyKey = key;
 
   const offline = list.filter(h => !jeOnline(h.key)).length;
+  const meKey = S.me?.key;
   const playersHtml = list.map(h => `
     <div class="pl-row ${jeOnline(h.key) ? "" : "off"}">
       <span class="pl-avatar">${esc((h.jmeno ?? "?").slice(0, 2).toUpperCase())}</span>
       <span class="pl-name">${esc(h.jmeno)}</span>
       ${aktualniHostKey() === h.key ? '<span class="crown" title="host">👑</span>' : ""}
       ${!jeOnline(h.key) ? '<span class="badge-offline">offline</span>' : ""}
+      ${edit && h.key !== meKey ? `
+        <button class="pl-action" data-kick="${h.key}" title="Kicknout (může se hned připojit zpátky)">Kick</button>
+        <button class="pl-action pl-ban" data-ban="${h.key}" title="Vyhodit a na 10 min zabanovat">Ban</button>` : ""}
     </div>`).join("") || `<p class="t-soft" style="font-size:.85rem">Ještě nikdo není online…</p>`;
 
   let settingsHtml;
@@ -336,6 +451,7 @@ function renderLobby() {
           Spustit turnaj (${Object.keys(hm).length} ${Object.keys(hm).length === 1 ? "hráč" : "hráčů"})
         </button>
         ${Object.keys(hm).length < 2 ? `<p class="lobby-note">Na start turnaje jsou potřeba aspoň 2 hráči.</p>` : ""}
+        ${Object.keys(hm).length > 1 ? `<button id="btn-kick-all" class="btn btn-ghost" style="width:100%;margin-top:8px;color:var(--danger)">🚫 Kicknout všechny (10 min ban)</button>` : ""}
       </div>`;
   } else {
     const r = (label, val) => `<div class="readonly-row"><span class="t-soft">${label}</span><b>${val}</b></div>`;
@@ -371,6 +487,10 @@ function renderLobby() {
     kont.querySelectorAll("[data-set-zivoty]").forEach(b => b.addEventListener("click", () => uloz({ pocetZivotu: +b.dataset.setZivoty })));
     const start = kont.querySelector("#btn-start");
     if (start) start.addEventListener("click", startTurnaje);
+    const kickAll = kont.querySelector("#btn-kick-all");
+    if (kickAll) kickAll.addEventListener("click", kicknoutVsechny);
+    kont.querySelectorAll("[data-kick]").forEach(b => b.addEventListener("click", () => hostKickHrace(b.dataset.kick)));
+    kont.querySelectorAll("[data-ban]").forEach(b => b.addEventListener("click", () => hostBanHrace(b.dataset.ban)));
   }
 }
 
@@ -418,8 +538,15 @@ async function startTurnaje() {
             : novyZapasDoc(nast, { id: z.id, kolo: z.kolo, vetev: "liga", typ: "liga", hraci: z.hraci }));
         }
       }
-      // nastavení se zápisem fáze "running" efektivně zamkne (editovat lze jen v lobby)
-      tx.set(ROOM_REF, { fase: "running", turnajHraci: keys, nastaveni: nast, pavouk, liga, vitez: null }, { merge: true });
+      // Nastavení se zápisem fáze "running" efektivně zamkne (editovat lze
+      // jen v lobby). Hostitele dopočítáme TADY, uvnitř transakce, čistě
+      // z hm (bez ohledu na "kdo je zrovna online") -- jinak hrozí race:
+      // kdyby se prioritní jméno (host) připojilo/naskočilo online těsně
+      // před kliknutím na start, ale ještě předtím, než se to stihlo
+      // zapsat do room.hostKey (to se děje jen asynchronně v lobby),
+      // zamkl by se špatný (starý) hostitel až do konce turnaje.
+      const hostKey = hostKeyZHraciMap(hm);
+      tx.set(ROOM_REF, { fase: "running", hostKey, hostJmeno: hostKey ? (hm[hostKey]?.jmeno ?? null) : null, turnajHraci: keys, nastaveni: nast, pavouk, liga, vitez: null }, { merge: true });
     });
     setStatus("Turnaj spuštěn! 🎮");
   } catch (e) {
@@ -690,6 +817,61 @@ async function monitor() {
 function queueEnd(id, vysl) {
   // Drobný náhodný skluz, ať nespustí transakci všech 30 klientů ve stejný ms.
   setTimeout(() => ukonciZapas(id, vysl), 300 + Math.random() * 1200);
+}
+
+// ---------------------------------------------------------------------------
+// LOBBY KICK – v lobby (před startem) je odpojení levné: po LOBBY_KICK_MS (5 s)
+// bez heartbeatu hráče rovnou odebereme z místnosti (turnajHraci ještě
+// neexistuje, takže tohle nemá vliv na nic rozehraného). JAKMILE turnaj
+// běží, tahle funkce nic nedělá – hráč se pak z turnaje kvůli odpojení
+// NIKDY automaticky neodstraní (nanejvýš prohraje kontumačně svůj zápas,
+// to řeší samostatně monitor() výše).
+// ---------------------------------------------------------------------------
+let lobbyKickPending = new Set();
+async function lobbyKickMonitor() {
+  if (!S.room || (S.room.fase ?? "lobby") !== "lobby") return;
+  const now = nowServer();
+  for (const h of Object.values(hraciMap())) {
+    const ts = tsMs(S.pritomnost.get(h.key)?.posledniVideni);
+    if (ts == null) continue; // pending zápis / nikdy neviděn -> nekopat
+    if (now - ts <= LOBBY_KICK_MS) continue;
+    if (lobbyKickPending.has(h.key)) continue;
+    lobbyKickPending.add(h.key);
+    setTimeout(() => kicknoutHrace(h.key).finally(() => lobbyKickPending.delete(h.key)), 150 + Math.random() * 400);
+  }
+}
+// Idempotentní – ověří si čerstvá data znovu uvnitř transakce (kdyby se
+// mezitím stihl vrátit, nic se nestane).
+async function kicknoutHrace(key) {
+  try {
+    await runTransaction(db, async (tx) => {
+      const rs = await tx.get(ROOM_REF);
+      if (!rs.exists() || (rs.data().fase ?? "lobby") !== "lobby") return;
+      const ps = await tx.get(pritomnostRef(key));
+      const ts = ps.exists() ? tsMs(ps.data().posledniVideni) : null;
+      if (ts != null && (nowServer() - ts) <= LOBBY_KICK_MS) return; // mezitím se vrátil
+      if (!rs.data().hraci?.[key]) return;
+      tx.update(ROOM_REF, { [`hraci.${key}`]: deleteField() });
+    });
+  } catch (e) { console.warn("kicknoutHrace:", e); }
+}
+
+// ---------------------------------------------------------------------------
+// Pokud mě někdo (host hromadným kickem, nebo lobby-kick monitor výše)
+// odebral z hraci, zatímco jsem měl appku otevřenou, vrátím se na vstupní
+// obrazovku a smažu si uložené jméno (ať se rovnou zpátky "sám" nepřipojím).
+// ---------------------------------------------------------------------------
+function osetriVyhozeni() {
+  if (!S.me || !S.room) return false;
+  if (hraciMap()[S.me.key]) return false;
+  S.me = null;
+  localStorage.removeItem("piskvorky-jmeno");
+  S.screen = "vstup";
+  document.querySelectorAll(".screen").forEach(s => s.classList.add("hidden"));
+  $("#screen-vstup").classList.remove("hidden");
+  $("#join-error").textContent = "Byl jsi odpojen z místnosti.";
+  $("#header-meta").innerHTML = ""; $("#header-nav").innerHTML = "";
+  return true;
 }
 
 // ============================ PŘEHLED ======================================
