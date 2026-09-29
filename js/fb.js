@@ -1,3 +1,4 @@
+// fb.js
 // fb.js – inicializace Firebase + odhad serverového času.
 // Firestore neumí nativně "kolik je na serveru", ale hodiny hráčů musí být
 // ukotvené k serveru (anti-drift/cheating). Proto si každý klient odhaduje
@@ -8,12 +9,12 @@ import { firebaseConfig } from "../firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import {
   getFirestore, doc, collection, onSnapshot, setDoc,
-  runTransaction, getDocs, writeBatch, serverTimestamp
+  runTransaction, getDocs, writeBatch, serverTimestamp, deleteField
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
-export { doc, collection, onSnapshot, setDoc, runTransaction, getDocs, writeBatch, serverTimestamp };
+export { doc, collection, onSnapshot, setDoc, runTransaction, getDocs, writeBatch, serverTimestamp, deleteField };
 
 // Jedna jediná "místnost" – singleton dokument pro celý stav turnaje.
 export const ROOM_REF = doc(db, "turnaj", "room");
