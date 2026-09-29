@@ -432,9 +432,7 @@ function renderLobby() {
         <label>Čas na hráče
           <select id="set-cas">${[1, 2, 3, 5, 10, 15, 20, 30].map(m => `<option value="${m * 60}" ${m * 60 === nast.casNaHrace ? "selected" : ""}>${m} min</option>`).join("")}</select></label>
       </div>
-      <div class="field"><span class="field-label">Délka výherní řady</span>
-        <select id="set-rada">${opt(3, minOpt, Math.min(nast.delkaRady, minOpt))}</select></div>
-      <div class="field"><span class="field-label">Formát turnaje</span>
+  <div class="field"><span class="field-label">Formát turnaje</span>
         <div class="switcher">
           <button data-set-rezim="pavouk" class="${nast.rezim === "pavouk" ? "active" : ""}">🕸 Pavouk</button>
           <button data-set-rezim="liga" class="${nast.rezim === "liga" ? "active" : ""}">🏆 Liga</button>
