@@ -1,3 +1,4 @@
+// state.js
 // state.js – sdílený stav klienta + odvozené informace (kdo je host, online…).
 // Drží se mimo app.js/matchview.js, aby se moduly cyklicky neimportovaly.
 import { nowServer, tsMs } from "./fb.js";
@@ -22,7 +23,12 @@ export function jeOnline(key) {
   const p = S.pritomnost.get(key);
   if (!p) return false;
   const ts = tsMs(p.posledniVideni);
-  if (ts == null) return false;
+  // Pending zápis (posledniVideni ještě neresolvnutý server timestamp) se
+  // lokálně na okamžik zobrazí jako null, než to server potvrdí – to je
+  // přesně chvíle, kdy klient PRÁVĚ posílá vlastní heartbeat, takže je to
+  // nejjistější důkaz, že je online. Bez týhle větve to na ~0.1s bliklo
+  // "offline" u každého heartbeatu (matoucí, i když neškodné).
+  if (ts == null) return true;
   return (nowServer() - ts) < ONLINE_LIMIT_MS;
 }
 
@@ -38,6 +44,20 @@ export function jeOnline(key) {
 // ---------------------------------------------------------------------------
 export function hostKeyVypocet() {
   const list = Object.values(hraciMap()).filter(h => jeOnline(h.key));
+  if (!list.length) return null;
+  const priorita = list.filter(h => HOST_PRIORITY.includes(normalizeName(h.jmeno)));
+  const kandidati = priorita.length ? priorita : list;
+  kandidati.sort((a, b) => (tsMs(a.pridano) ?? 0) - (tsMs(b.pridano) ?? 0));
+  return kandidati[0].key;
+}
+
+// Čistá varianta BEZ ohledu na online stav – používá se výhradně při
+// startu turnaje (uvnitř transakce, viz app.js), aby zámek hostitele
+// nezávisel na časování propagace "kdo je zrovna online" napříč klienty
+// (přesně tenhle race dřív mohl uzamknout špatného hostitele, když
+// prioritní jméno naskočilo online až těsně před kliknutím na start).
+export function hostKeyZHraciMap(hm) {
+  const list = Object.values(hm ?? {});
   if (!list.length) return null;
   const priorita = list.filter(h => HOST_PRIORITY.includes(normalizeName(h.jmeno)));
   const kandidati = priorita.length ? priorita : list;
