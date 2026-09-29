@@ -1,13 +1,28 @@
+// util.js
 // util.js – pomocné funkce a konstanty.
 
 // --- časování přítomnosti / odpojení ---
-export const HEARTBEAT_MS = 8000;     // jak často klient dává "žiju"
-export const ONLINE_LIMIT_MS = 20000; // ~2 zmeškané heartbeaty => považováno za offline
+export const HEARTBEAT_MS = 2000;     // jak často klient dává "žiju"
+export const ONLINE_LIMIT_MS = 20000; // obecný práh "offline" (zobrazení + báze pro kontumaci v zápase)
 // Lhůta na návrat po odpojení v běžícím zápase (zadání: 2 minuty).
 // Skutečná kontumace nastane cca 20 s + 120 s od posledního heartbeatu –
-// práh 20 s je toleranční rezerva proti výpadkům sítě.
+// práh 20 s je toleranční rezerva proti výpadkům sítě. DŮLEŽITÉ: tohle platí
+// jen pro zápas, co už běží – v lobby (před startem) používáme mnohem
+// přísnější LOBBY_KICK_MS níž, a jakmile turnaj běží, hráč se z turnajHraci
+// kvůli odpojení NIKDY automaticky neodstraňuje (nejvýš prohraje kontumačně
+// svůj aktuální zápas).
 export const ODPOJ_GRACE_MS = 120000;
 export const CAS_TOLERANCE_S = 1.5;   // tolerance proti nepřesnosti odhadu času při flagu
+
+// V LOBBY (před startem turnaje) je odpojení levná záležitost – po 5 s bez
+// heartbeatu hráče rovnou odebereme z místnosti (viz zadání: "ať tam
+// nekoukaj lidi, co tam vlastně nejsou"). Díky HEARTBEAT_MS=2000 to jde
+// spolehlivě odlišit od normální mezery mezi heartbeaty.
+export const LOBBY_KICK_MS = 5000;
+
+// Host může v lobby "vyhodit všechny" a na tuto dobu jim zablokovat
+// opětovné připojení (ochrana proti spamu/rušení lobby).
+export const BAN_MS = 10 * 60 * 1000;
 
 // Normalizace jména: trim + lowercase + bez diakritiky (NFD rozklad a odstranění
 // combining marks) – podle zadání musí porovnání jmen fungovat spolehlivě
