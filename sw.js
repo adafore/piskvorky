@@ -1,15 +1,6 @@
 // sw.js – minimální service worker, jen aby appka splňovala podmínky pro
 // "Nainstalovat" (Add to Home Screen / PWA) a fungovala i chvíli offline.
-//
-// Strategie: network-first (vždy se snaž stáhnout čerstvou verzi), a jen
-// když síť selže, ber to z cache. Nezáměrně tak NIKDY neservíruje starý
-// zaseklý JS jako hlavní zdroj, když je připojení k dispozici – to by u
-// appky, co se bude časem opravovat, mohlo dělat víc škody než užitku.
-//
-// POZOR při přenasazení: pokud příště měníš app.js/style.css/atd., zvyš
-// CACHE_NAME (např. na "piskvorky-v3") – jinak si prohlížeče uživatelů,
-// co appku mají nainstalovanou, můžou nějakou dobu držet starou cache.
-const CACHE_NAME = "piskvorky-v1";
+const CACHE_NAME = "piskvorky-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -36,7 +27,7 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(APP_SHELL))
-      .catch(() => {}) // offline instalace / chybějící soubor appku nesmí rozbít
+      .catch(() => {})
   );
   self.skipWaiting();
 });
@@ -52,11 +43,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  // Jen vlastní (stejný origin) GET požadavky – Firestore/Firebase SDK
-  // (jiné originy) necháváme čistě na síti, do těch service worker
-  // vůbec nezasahuje.
   if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
-
   event.respondWith(
     fetch(req)
       .then((res) => {
