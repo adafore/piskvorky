@@ -269,8 +269,9 @@ function renderHeader() {
   const online = Object.keys(hraciMap()).filter(jeOnline).length;
   let meta = `<span class="chip ${fase === "running" ? "live" : ""}">${faseTxt}</span>`;
   const hk = aktualniHostKey();
-  if (hk) meta += `<span class="chip host">👑 ${esc(jmeno(hk))}</span>`;
-  if (S.me) meta += `<span class="chip me">${esc(S.me.jmeno)}</span>`;
+  const jsemJaHost = S.me && hk === S.me.key;
+  if (hk) meta += `<span class="chip host">👑 ${esc(jmeno(hk))}${jsemJaHost ? " (ty)" : ""}</span>`;
+  if (S.me && !jsemJaHost) meta += `<span class="chip me">${esc(S.me.jmeno)}</span>`;
   meta += `<span class="chip">👥 online: ${online}</span>`;
   $("#header-meta").innerHTML = meta;
 
@@ -424,7 +425,6 @@ function renderLobby() {
       const v = from + i;
       return `<option value="${v}" ${v === sel ? "selected" : ""}>${v}</option>`;
     }).join("");
-    const minOpt = Math.min(10, nast.velikostPole);
     settingsHtml = `
       <div class="settings-grid">
         <label>Velikost pole
@@ -432,7 +432,7 @@ function renderLobby() {
         <label>Čas na hráče
           <select id="set-cas">${[1, 2, 3, 5, 10, 15, 20, 30].map(m => `<option value="${m * 60}" ${m * 60 === nast.casNaHrace ? "selected" : ""}>${m} min</option>`).join("")}</select></label>
       </div>
-  <div class="field"><span class="field-label">Formát turnaje</span>
+      <div class="field"><span class="field-label">Formát turnaje</span>
         <div class="switcher">
           <button data-set-rezim="pavouk" class="${nast.rezim === "pavouk" ? "active" : ""}">🕸 Pavouk</button>
           <button data-set-rezim="liga" class="${nast.rezim === "liga" ? "active" : ""}">🏆 Liga</button>
@@ -456,7 +456,6 @@ function renderLobby() {
     settingsHtml = `
       ${r("Velikost pole", `${nast.velikostPole}×${nast.velikostPole}`)}
       ${r("Čas na hráče", fmtCas(nast.casNaHrace))}
-      ${r("Délka výherní řady", nast.delkaRady)}
       ${r("Formát", nast.rezim === "liga" ? "Liga" : "Pavouk")}
       ${nast.rezim === "pavouk" ? r("Počet životů", nast.pocetZivotu) : r("Počet kol", nast.pocetKol)}
       <p class="lobby-note">${aktualniHostKey() ? `Nastavení může měnit jen host (${esc(jmeno(aktualniHostKey()))}).` : "Čeká se na hostitele…"}</p>`;
@@ -478,7 +477,7 @@ function renderLobby() {
       catch (e) { setStatus("Chyba ukládání: " + e.message); }
     };
     kont.querySelectorAll("select").forEach(sel => sel.addEventListener("change", () => {
-      const map = { "set-velikost": ["velikostPole", +sel.value], "set-cas": ["casNaHrace", +sel.value], "set-rada": ["delkaRady", +sel.value], "set-kola": ["pocetKol", +sel.value] }[sel.id];
+      const map = { "set-velikost": ["velikostPole", +sel.value], "set-cas": ["casNaHrace", +sel.value], "set-kola": ["pocetKol", +sel.value] }[sel.id];
       if (map) uloz({ [map[0]]: map[1] });
     }));
     kont.querySelectorAll("[data-set-rezim]").forEach(b => b.addEventListener("click", () => uloz({ rezim: b.dataset.setRezim })));
