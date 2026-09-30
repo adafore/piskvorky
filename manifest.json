@@ -1,14 +1,16 @@
 {
+  "id": "piskvorkovy-turnaj-v2",
   "name": "Piškvorkový turnaj",
   "short_name": "Piškvorky",
   "description": "Turnaj v piškvorkách (gomoku) pro víc hráčů – pavouk i liga, v reálném čase.",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#f5f6fb",
   "theme_color": "#4f7cff",
   "lang": "cs",
+  "prefer_related_applications": false,
   "icons": [
     { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
